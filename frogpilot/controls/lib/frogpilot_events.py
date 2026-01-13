@@ -70,7 +70,10 @@ class FrogPilotEvents:
     if not self.frogpilot_planner.tracking_lead and sm["carState"].standstill and sm["carState"].gearShifter not in NON_DRIVING_GEARS:
       if not self.frogpilot_planner.model_stopped and self.stopped_for_light and frogpilot_toggles.green_light_alert:
         self.events.add(FrogPilotEventName.greenLight)
-
+##################################################################
+        if frogpilot_toggles.autoacc_greenlight:
+          params_memory.put_int("AutoACCGreenLightstatus", 1)
+##################################################################
       self.stopped_for_light = self.frogpilot_planner.cem.stop_light_detected
     else:
       self.stopped_for_light = False
@@ -80,17 +83,22 @@ class FrogPilotEvents:
 
       self.played_events.add("holidayActive")
 
-    if self.frogpilot_planner.tracking_lead and sm["carState"].standstill and sm["carState"].gearShifter not in NON_DRIVING_GEARS and frogpilot_toggles.lead_departing_alert:
-      if self.tracked_lead_distance == 0:
-        self.tracked_lead_distance = self.frogpilot_planner.lead_one.dRel
+##################################################################
+    if self.frogpilot_planner.tracking_lead and self.frogpilot_planner.lead_one.dRel < 10:
+      if sm["carState"].standstill and sm["carState"].gearShifter not in NON_DRIVING_GEARS and frogpilot_toggles.lead_departing_alert:
+        if self.tracked_lead_distance == 0:
+          self.tracked_lead_distance = self.frogpilot_planner.lead_one.dRel
 
-      lead_departing = self.frogpilot_planner.lead_one.dRel - self.tracked_lead_distance > 1
-      lead_departing &= self.frogpilot_planner.lead_one.vLead > 1
+        lead_departing = self.frogpilot_planner.lead_one.dRel - self.tracked_lead_distance > 1
+        lead_departing &= self.frogpilot_planner.lead_one.vLead > 1
 
-      if lead_departing:
-        self.events.add(FrogPilotEventName.leadDeparting)
+        if lead_departing:
+          self.events.add(FrogPilotEventName.leadDeparting)
+          if frogpilot_toggles.autoacc_caraway:
+            params_memory.put_int("AutoACCCarAwaystatus", 1)
     else:
       self.tracked_lead_distance = 0
+##################################################################
 
     if "torqueNNLoad" not in self.played_events and self.startup_seen and alerts_empty and len(self.events) == 0 and params.get("NNFFModelName", encoding="utf-8") is not None and frogpilot_toggles.nnff:
       self.events.add(FrogPilotEventName.torqueNNLoad)
@@ -204,8 +212,13 @@ class FrogPilotEvents:
 
       self.always_on_lateral_enabled_previously = sm["frogpilotCarState"].alwaysOnLateralEnabled
 
-    if self.frogpilot_planner.frogpilot_vcruise.slc.speed_limit_changed_timer == DT_MDL and frogpilot_toggles.speed_limit_changed_alert:
-      self.events.add(FrogPilotEventName.speedLimitChanged)
+##################################################################
+    slc = self.frogpilot_planner.frogpilot_vcruise.slc
+    if slc.speed_limit_changed_timer == DT_MDL and frogpilot_toggles.speed_limit_changed_alert:
+      # Only alert when the *applied* speed limit decreases (target drops)
+      if slc.target > 0 and slc.previous_target > 0 and slc.target < slc.previous_target:
+        self.events.add(FrogPilotEventName.speedLimitChanged)
+##################################################################
 
     self.startup_seen |= sm["frogpilotControlsState"].alertText1 == frogpilot_toggles.startup_alert_top and sm["frogpilotControlsState"].alertText2 == frogpilot_toggles.startup_alert_bottom
 

@@ -2,6 +2,9 @@
 #include "selfdrive/ui/qt/onroad/annotated_camera.h"
 
 #include <QPainter>
+//////////////////////////////
+#include <QTime>
+//////////////////////////////
 #include <algorithm>
 #include <cmath>
 
@@ -90,7 +93,7 @@ void AnnotatedCameraWidget::updateState(const UIState &s, const FrogPilotUIState
   has_eu_speed_limit |= (frogpilot_toggles.value("show_speed_limits").toBool() || frogpilot_toggles.value("speed_limit_controller").toBool()) && frogpilot_toggles.value("speed_limit_vienna").toBool();
   has_eu_speed_limit &= !frogpilot_toggles.value("hide_speed_limit").toBool() || frogpilotPlan.getSpeedLimitChanged();
   is_metric = s.scene.is_metric;
-  speedUnit =  s.scene.is_metric ? tr("km/h") : tr("mph");
+  speedUnit =  s.scene.is_metric ? tr("公里/小時") : tr("mph");
   hideBottomIcons = (cs.getAlertSize() != cereal::ControlsState::AlertSize::NONE);
   hideBottomIcons |= (frogpilot_nvg->signalStyle == "traditional" || frogpilot_nvg->signalStyle == "traditional_gif") && (car_state.getLeftBlinker() || car_state.getRightBlinker());
   status = s.status;
@@ -130,7 +133,9 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
 
   // Header gradient
   QLinearGradient bg(0, UI_HEADER_HEIGHT - (UI_HEADER_HEIGHT / 2.5), 0, UI_HEADER_HEIGHT);
-  bg.setColorAt(0, QColor::fromRgbF(0, 0, 0, 0.45));
+  //////////////////////////
+  bg.setColorAt(0, QColor::fromRgbF(0, 0, 0, 0.0));
+  ////////////////////////////
   bg.setColorAt(1, QColor::fromRgbF(0, 0, 0, 0));
   p.fillRect(0, 0, width(), UI_HEADER_HEIGHT, bg);
 
@@ -183,10 +188,10 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
       max_color = QColor(0xa6, 0xa6, 0xa6, 0xff);
       set_speed_color = QColor(0x72, 0x72, 0x72, 0xff);
     }
-    p.setFont(InterFont(40, QFont::DemiBold));
+    p.setFont(InterFont(40, QFont::Normal));
     p.setPen(max_color);
-    p.drawText(set_speed_rect.adjusted(0, 27, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("MAX"));
-    p.setFont(InterFont(90, QFont::Bold));
+    p.drawText(set_speed_rect.adjusted(0, 27, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("最高"));
+    p.setFont(InterFont(90, QFont::Normal));
     p.setPen(set_speed_color);
     p.drawText(set_speed_rect.adjusted(0, 77, 0, 0), Qt::AlignTop | Qt::AlignHCenter, setSpeedStr);
   }
@@ -203,17 +208,17 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
     p.save();
     p.setOpacity(frogpilotPlan.getSlcOverriddenSpeed() == 0 ? 1.0 : 0.25);
     if (frogpilotPlan.getSlcOverriddenSpeed() == 0 && frogpilot_toggles.value("show_speed_limit_offset").toBool()) {
-      p.setFont(InterFont(28, QFont::DemiBold));
-      p.drawText(sign_rect.adjusted(0, 22, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("LIMIT"));
-      p.setFont(InterFont(70, QFont::Bold));
+      p.setFont(InterFont(28, QFont::Normal));
+      p.drawText(sign_rect.adjusted(0, 22, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("速限"));
+      p.setFont(InterFont(70, QFont::Normal));
       p.drawText(sign_rect.adjusted(0, 51, 0, 0), Qt::AlignTop | Qt::AlignHCenter, speedLimitStr);
-      p.setFont(InterFont(50, QFont::DemiBold));
+      p.setFont(InterFont(50, QFont::Normal));
       p.drawText(sign_rect.adjusted(0, 120, 0, 0), Qt::AlignTop | Qt::AlignHCenter, frogpilot_nvg->speedLimitOffsetStr);
     } else {
-      p.setFont(InterFont(28, QFont::DemiBold));
-      p.drawText(sign_rect.adjusted(0, 22, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("SPEED"));
-      p.drawText(sign_rect.adjusted(0, 51, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("LIMIT"));
-      p.setFont(InterFont(70, QFont::Bold));
+      p.setFont(InterFont(28, QFont::Normal));
+      p.drawText(sign_rect.adjusted(0, 22, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("速度"));
+      p.drawText(sign_rect.adjusted(0, 51, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("速限"));
+      p.setFont(InterFont(70, QFont::Normal));
       p.drawText(sign_rect.adjusted(0, 85, 0, 0), Qt::AlignTop | Qt::AlignHCenter, speedLimitStr);
     }
     p.restore();
@@ -231,12 +236,12 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
     p.setOpacity(frogpilotPlan.getSlcOverriddenSpeed() == 0 ? 1.0 : 0.25);
     p.setPen(blackColor());
     if (frogpilot_toggles.value("show_speed_limit_offset").toBool()) {
-      p.setFont(InterFont((speedLimitStr.size() >= 3) ? 60 : 70, QFont::Bold));
+      p.setFont(InterFont((speedLimitStr.size() >= 3) ? 60 : 70, QFont::Normal));
       p.drawText(sign_rect.adjusted(0, -25, 0, 0), Qt::AlignCenter, speedLimitStr);
-      p.setFont(InterFont(40, QFont::DemiBold));
+      p.setFont(InterFont(40, QFont::Normal));
       p.drawText(sign_rect.adjusted(0, 100, 0, 0), Qt::AlignTop | Qt::AlignHCenter, frogpilot_nvg->speedLimitOffsetStr);
     } else {
-      p.setFont(InterFont((speedLimitStr.size() >= 3) ? 60 : 70, QFont::Bold));
+      p.setFont(InterFont((speedLimitStr.size() >= 3) ? 60 : 70, QFont::Normal));
       p.drawText(sign_rect, Qt::AlignCenter, speedLimitStr);
     }
     p.restore();
@@ -244,11 +249,36 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
 
   // current speed
   if (!frogpilot_nvg->bigMapOpen && frogpilot_nvg->standstillDuration == 0 && !frogpilot_toggles.value("hide_speed").toBool()) {
-    p.setFont(InterFont(176, QFont::Bold));
-    drawText(p, rect().center().x(), 210, speedStr);
+    ////////////////////////////////////////////////
+    // 判斷白天/晚上
+    QTime now = QTime::currentTime();
+    bool isNight = (now < QTime(6, 0) || now >= QTime(18, 30));
+
+    p.setFont(InterFont(176, QFont::Normal));
+
+    if (isNight) {
+      // 晚上：白色外框，黑色填色
+      QPainterPath textPath;
+      textPath.addText(0, 0, p.font(), speedStr);
+      QRectF bounds = textPath.boundingRect();
+      textPath.translate(rect().center().x() - bounds.width() / 2, 210);
+
+      p.setPen(QPen(Qt::white, 6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+      p.setBrush(Qt::NoBrush);
+      p.drawPath(textPath);
+
+      p.setPen(Qt::NoPen);
+      p.setBrush(Qt::black);
+      p.drawPath(textPath);
+    } else {
+      // 白天：原始白色顯示
+      drawText(p, rect().center().x(), 210, speedStr);
+    }
+
     p.setFont(InterFont(66));
     drawText(p, rect().center().x(), 290, speedUnit, 200);
   }
+  ////////////////////////////////////////////////
 
   p.restore();
 

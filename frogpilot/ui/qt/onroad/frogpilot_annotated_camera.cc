@@ -1,6 +1,14 @@
 #include <QMovie>
+/////////////////////////////////////////////////////
+#include <fstream>
+#include <sstream>
+#include <map>
+/////////////////////////////////////////////////////
 
 #include "frogpilot/ui/qt/onroad/frogpilot_annotated_camera.h"
+/////////////////////////////////////////////////////
+#include "selfdrive/ui/qt/maps/map_helpers.h"
+/////////////////////////////////////////////////////
 
 FrogPilotAnnotatedCameraWidget::FrogPilotAnnotatedCameraWidget(QWidget *parent) : QWidget(parent) {
   animationTimer = new QTimer(this);
@@ -125,8 +133,8 @@ void FrogPilotAnnotatedCameraWidget::updateState(const FrogPilotUIState &fs, con
   const cereal::FrogPilotPlan::Reader &frogpilotPlan = fpsm["frogpilotPlan"].getFrogpilotPlan();
 
   if (scene.is_metric || frogpilot_toggles.value("use_si_metrics").toBool()) {
-    leadDistanceUnit = tr(" meters");
-    leadSpeedUnit = frogpilot_toggles.value("use_si_metrics").toBool() ? tr(" m/s") : tr(" km/h");
+    leadDistanceUnit = tr(" 米");
+    leadSpeedUnit = frogpilot_toggles.value("use_si_metrics").toBool() ? tr(" m/s") : tr(" 公里/小時");
 
     distanceConversion = 1.0f;
     speedConversion = scene.is_metric ? MS_TO_KPH : MS_TO_MPH;
@@ -240,11 +248,18 @@ void FrogPilotAnnotatedCameraWidget::paintFrogPilotWidgets(QPainter &p, UIState 
   if (!frogpilot_scene.map_open && standstillDuration != 0 && frogpilot_scene.started_timer / UI_FREQ >= 60) {
     paintStandstillTimer(p);
   }
-
+/////////////////停車標記//////////////////
   if (scene.track_vertices.length() >= 1 && frogpilotPlan.getRedLight() && frogpilot_toggles.value("show_stopping_point").toBool()) {
     paintStoppingPoint(p, scene, frogpilot_scene, frogpilot_toggles);
+    int roadProfile = params_memory.getInt("RoadtypeProfile");
+    const bool stopmarkslowsdown = params.getBool("Stopmarkslowsdown");
+    if (stopmarkslowsdown && roadProfile == 1 && roadProfile == 2 ) {
+      params_memory.putBool("StopmarkActive", true);
+    } else {
+      params_memory.putBool("StopmarkActive", false);
+    }
   }
-
+////////////////////////////////////////
   if (!bigMapOpen && (carState.getLeftBlinker() || carState.getRightBlinker()) && signalStyle != "None") {
     if (!animationTimer->isActive()) {
       animationTimer->start(signalAnimationLength);
@@ -257,6 +272,13 @@ void FrogPilotAnnotatedCameraWidget::paintFrogPilotWidgets(QPainter &p, UIState 
   if (!frogpilot_scene.map_open && !hideBottomIcons) {
     paintWeather(p, frogpilotPlan, frogpilot_scene);
   }
+
+/////////////////////////////////////////////////////
+  // 車輛資訊面板 (HFOP Info Panel)
+  if (!frogpilot_scene.map_open && !hideBottomIcons && frogpilot_toggles.value("hfop_inf").toBool()) {
+    paintVehicleInfoPanel(p, carState, frogpilot_toggles);
+  }
+/////////////////////////////////////////////////////
 }
 
 void FrogPilotAnnotatedCameraWidget::paintAdjacentPaths(QPainter &p, const cereal::CarState::Reader &carState, const FrogPilotUIScene &frogpilot_scene, const QJsonObject &frogpilot_toggles) {
@@ -280,9 +302,9 @@ void FrogPilotAnnotatedCameraWidget::paintAdjacentPaths(QPainter &p, const cerea
   };
 
   std::function<void(bool, float, const QPolygonF &)> drawAdjacentPathMetric = [&p, &frogpilot_toggles, this](bool isBlindSpot, float width, const QPolygonF &polygon) {
-    QString text = isBlindSpot && frogpilot_toggles.value("blind_spot_path").toBool() ? tr("Vehicle in blind spot") : QString::number(width * distanceConversion, 'f', 2) + leadDistanceUnit;
+    QString text = isBlindSpot && frogpilot_toggles.value("blind_spot_path").toBool() ? tr("車輛在盲點中") : QString::number(width * distanceConversion, 'f', 2) + leadDistanceUnit;
 
-    p.setFont(InterFont(40, QFont::DemiBold));
+    p.setFont(InterFont(40, QFont::Normal));
     p.setPen(QPen(whiteColor()));
     p.drawText(polygon.boundingRect(), Qt::AlignCenter, text);
   };
@@ -402,7 +424,7 @@ void FrogPilotAnnotatedCameraWidget::paintCompass(QPainter &p, QJsonObject &frog
   clipPath.addRoundedRect(compassWidget.adjusted(5, 5, -5, -5), 24, 24);
   p.setClipPath(clipPath);
 
-  QFont font = InterFont(65, QFont::Bold);
+  QFont font = InterFont(65, QFont::Normal);
   QFontMetrics fm(font);
   p.setFont(font);
   p.setPen(QPen(whiteColor()));
@@ -486,7 +508,7 @@ void FrogPilotAnnotatedCameraWidget::paintCurveSpeedControl(QPainter &p, const c
   QRect cscRect(curveSpeedRect.topLeft() + QPoint(0, curveSpeedRect.height() + 10), QSize(curveSpeedRect.width(), 100));
 
   p.setBrush(blueColor(166));
-  p.setFont(InterFont(45, QFont::Bold));
+  p.setFont(InterFont(45, QFont::Normal));
   p.setPen(QPen(blueColor(), 10));
 
   p.drawRoundedRect(cscRect, 24, 24);
@@ -530,8 +552,15 @@ void FrogPilotAnnotatedCameraWidget::paintLateralPaused(QPainter &p, FrogPilotUI
 void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent, QPointF *chevron, const cereal::FrogPilotPlan::Reader &frogpilotPlan, const cereal::RadarState::LeadData::Reader &lead_data) {
   float leadDistance = lead_data.getDRel() + (adjacent ? fabs(lead_data.getYRel()) : 0);
   float leadSpeed = std::max(lead_data.getVLead(), 0.0f);
+///////////////////////////////////////////
+  // 計算速度差並寫入 leadspeeddiffProfile
+  if (!adjacent) {
+    float speedDiff = (leadSpeed - speed / speedConversion) * (speedConversion == KM_TO_MILE ? 3.6f : 1.0f);
+    params_memory.putInt("leadspeeddiffProfile", (int)std::round(speedDiff));
+  }
+///////////////////////////////////////////
 
-  p.setFont(InterFont(40, QFont::Bold));
+  p.setFont(InterFont(40, QFont::Normal));
   p.setPen(QPen(whiteColor()));
 
   QString text;
@@ -687,10 +716,10 @@ void FrogPilotAnnotatedCameraWidget::paintPendingSpeedLimit(QPainter &p, const c
     p.setPen(pendingLimitTimer.elapsed() % 1000 < 500 ? QPen(blackColor(), 6) : QPen(redColor(), 6));
     p.drawRoundedRect(newSpeedLimitRect.adjusted(9, 9, -9, -9), 16, 16);
 
-    p.setFont(InterFont(28, QFont::DemiBold));
-    p.drawText(newSpeedLimitRect.adjusted(0, 22, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("PENDING"));
-    p.drawText(newSpeedLimitRect.adjusted(0, 51, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("LIMIT"));
-    p.setFont(InterFont(70, QFont::Bold));
+    p.setFont(InterFont(28, QFont::Normal));
+    p.drawText(newSpeedLimitRect.adjusted(0, 22, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("下一段"));
+    p.drawText(newSpeedLimitRect.adjusted(0, 51, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("速限"));
+    p.setFont(InterFont(70, QFont::Normal));
     p.drawText(newSpeedLimitRect.adjusted(0, 85, 0, 0), Qt::AlignTop | Qt::AlignHCenter, newSpeedLimitStr);
   } else {
     p.setBrush(whiteColor());
@@ -700,7 +729,7 @@ void FrogPilotAnnotatedCameraWidget::paintPendingSpeedLimit(QPainter &p, const c
     p.drawEllipse(newSpeedLimitRect.adjusted(16, 16, -16, -16));
 
     p.setPen(pendingLimitTimer.elapsed() % 1000 < 500 ? QPen(blackColor(), 6) : QPen(redColor(), 6));
-    p.setFont(InterFont((newSpeedLimitStr.size() >= 3) ? 60 : 70, QFont::Bold));
+    p.setFont(InterFont((newSpeedLimitStr.size() >= 3) ? 60 : 70, QFont::Normal));
     p.drawText(newSpeedLimitRect, Qt::AlignCenter, newSpeedLimitStr);
   }
 
@@ -757,21 +786,73 @@ void FrogPilotAnnotatedCameraWidget::paintRoadName(QPainter &p) {
 
   p.save();
 
-  QFont font = InterFont(40, QFont::DemiBold);
-
+  QFont font = InterFont(70, QFont::Normal);
   int textWidth = QFontMetrics(font).horizontalAdvance(roadName);
 
-  QRect roadNameRect((width() - (textWidth + 100)) / 2, rect().bottom() - 55 + 1, textWidth + 100, 50);
-
-  p.setBrush(blackColor(166));
-  p.setOpacity(1.0);
-  p.setPen(QPen(blackColor(), 10));
-  p.drawRoundedRect(roadNameRect, 24, 24);
+/////////////////////////////////////////////////////
+  QRect roadNameRect((width() - textWidth * 1.25) / 2, rect().bottom() - 100 + 1, textWidth * 1.25, 70);
+/////////////////////////////////////////////////////
+  // 背景框（可選）
+  // p.setBrush(blackColor(166));
+  // p.setOpacity(1.0);
+  // p.setPen(QPen(blackColor(), 10));
+  // p.drawRoundedRect(roadNameRect, 24, 24);
+/////////////////////////////////////////////////////
 
   p.setFont(font);
   p.setPen(QPen(whiteColor(), 6));
   p.drawText(roadNameRect, Qt::AlignCenter, roadName);
 
+/////////////////////////////////////////////////////
+  // 自動道路類型識別 + 速限優先序設定
+  bool autoRoadtype = params.getBool("AutoRoadtype");
+  if (autoRoadtype) {
+    int previousRoadProfile = params_memory.getInt("RoadtypeProfile");
+    int newRoadProfile = 2; // 默認：一般平面
+    QString priority1 = "Map Data";
+    QString priority2 = "Navigation";
+    QString priority3 = "Lowest";
+
+    // 根據道路名稱分類 + 同時設定優先序
+    if (roadName.contains("高速") || roadName.contains("國道")) {
+      newRoadProfile = 4; // 高速公路
+      priority1 = "Highest";
+      priority2 = "None";
+      priority3 = "None";
+    } else if (roadName.contains("快速") || roadName.contains("省道")) {
+      newRoadProfile = 3; // 快速道路
+      priority1 = "Map Data";
+      priority2 = "Navigation";
+      priority3 = "Highest";
+    } else if (roadName.contains("交流道")) {
+      newRoadProfile = 2; // 一般平面
+      priority1 = "Map Data";
+      priority2 = "Navigation";
+      priority3 = "Dashboard";
+    } else if (roadName.contains("街") || roadName.contains("巷") || roadName.contains("弄")) {
+      newRoadProfile = 1; // 街道巷弄
+      priority1 = "Map Data";
+      priority2 = "Navigation";
+      priority3 = "Lowest";
+    } else {
+      newRoadProfile = 2; // 一般平面
+      priority1 = "Map Data";
+      priority2 = "Navigation";
+      priority3 = "Lowest";
+    }
+
+    // 只有當 roadProfile 真的變更時才更新
+    if (newRoadProfile != previousRoadProfile) {
+      params_memory.putInt("RoadtypeProfile", newRoadProfile);
+      // 同時更新速限優先序
+      params.put("SLCPriority1", priority1.toStdString());
+      params.put("SLCPriority2", priority2.toStdString());
+      params.put("SLCPriority3", priority3.toStdString());
+      // 觸發 FrogPilot toggles 更新
+      params.putBool("FrogPilotTogglesUpdated", true);
+    }
+  }
+/////////////////////////////////////////////////////
   p.restore();
 }
 
@@ -808,9 +889,9 @@ void FrogPilotAnnotatedCameraWidget::paintSmartControllerTraining(QPainter &p, c
   p.setPen(QPen(blackColor(), 10));
   p.drawRoundedRect(textRect, 24, 24);
 
-  p.setFont(InterFont(35, QFont::Bold));
+  p.setFont(InterFont(35, QFont::Normal));
   p.setPen(QPen(whiteColor(), 6));
-  p.drawText(textRect.adjusted(20, 0, 0, 0), Qt::AlignVCenter | Qt::AlignLeft, "Training...");
+  p.drawText(textRect.adjusted(20, 0, 0, 0), Qt::AlignVCenter | Qt::AlignLeft, "訓練...");
 
   p.restore();
 }
@@ -827,11 +908,11 @@ void FrogPilotAnnotatedCameraWidget::paintSpeedLimitSources(QPainter &p, const c
 
     if (QString::fromUtf8(frogpilotPlan.getSlcSpeedLimitSource().cStr()) == title && speedLimitValue != 0) {
       p.setBrush(redColor(166));
-      p.setFont(InterFont(35, QFont::Bold));
+      p.setFont(InterFont(35, QFont::Normal));
       p.setPen(QPen(redColor(), 10));
     } else {
       p.setBrush(blackColor(166));
-      p.setFont(InterFont(35, QFont::DemiBold));
+      p.setFont(InterFont(35, QFont::Normal));
       p.setPen(QPen(blackColor(), 10));
     }
 
@@ -855,17 +936,40 @@ void FrogPilotAnnotatedCameraWidget::paintSpeedLimitSources(QPainter &p, const c
     QRect textRect(iconRect.right() + 10, rect.y(), rect.width() - iconRect.width() - 30, rect.height());
     p.drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, fullText);
   };
+/////////////////////////////////////////////////////////////////////
+const int rect_height = 60;
+const int spacing = UI_BORDER_SIZE / 2;
+const int info_panel_top = 20;  // 距離畫面頂部 20 像素
+const int info_panel_left = speedLimitRect.right() + 20;  // 速限右邊 20 像素
 
-  QRect dashboardRect(speedLimitRect.x() - signMargin, speedLimitRect.y() + speedLimitRect.height() + UI_BORDER_SIZE, 450, 60);
-  QRect mapDataRect(dashboardRect.x(), dashboardRect.y() + dashboardRect.height() + UI_BORDER_SIZE / 2, 450, 60);
-  QRect navigationRect(mapDataRect.x(), mapDataRect.y() + mapDataRect.height() + UI_BORDER_SIZE / 2, 450, 60);
-  QRect nextLimitRect(navigationRect.x(), navigationRect.y() + navigationRect.height() + UI_BORDER_SIZE / 2, 450, 60);
+// 初始化繪製位置
+int current_y = info_panel_top;
 
-  drawSource(dashboardRect, dashboardIcon, "Dashboard", frogpilotCarState.getDashboardSpeedLimit() * speedConversion);
-  drawSource(mapDataRect, mapDataIcon, "Map Data", frogpilotPlan.getSlcMapSpeedLimit() * speedConversion);
-  drawSource(navigationRect, navigationIcon, "Navigation", frogpilotNavigation.getNavigationSpeedLimit() * speedConversion);
-  drawSource(nextLimitRect, nextMapsIcon, "Upcoming", frogpilotPlan.getSlcNextSpeedLimit() * speedConversion);
+// 繪製有效項目
+if (frogpilotCarState.getDashboardSpeedLimit() > 0) {
+  QRect dashboardRect(info_panel_left, current_y, 450, rect_height);
+  drawSource(dashboardRect, dashboardIcon, tr("儀表"), frogpilotCarState.getDashboardSpeedLimit() * speedConversion);
+  current_y += rect_height + spacing;
+}
 
+if (frogpilotPlan.getSlcMapSpeedLimit() > 0) {
+  QRect mapDataRect(info_panel_left, current_y, 450, rect_height);
+  drawSource(mapDataRect, mapDataIcon, tr("地圖"), frogpilotPlan.getSlcMapSpeedLimit() * speedConversion);
+  current_y += rect_height + spacing;
+}
+
+if (frogpilotNavigation.getNavigationSpeedLimit() > 0) {
+  QRect navigationRect(info_panel_left, current_y, 450, rect_height);
+  drawSource(navigationRect, navigationIcon, tr("導航"), frogpilotNavigation.getNavigationSpeedLimit() * speedConversion);
+  current_y += rect_height + spacing;
+}
+
+if (frogpilotPlan.getSlcNextSpeedLimit() > 0) {
+  QRect nextLimitRect(info_panel_left, current_y, 450, rect_height);
+  drawSource(nextLimitRect, nextMapsIcon, tr("下一段"), frogpilotPlan.getSlcNextSpeedLimit() * speedConversion);
+  current_y += rect_height + spacing;
+}
+/////////////////////////////////////////////////////////////////////
   p.restore();
 }
 
@@ -902,9 +1006,9 @@ void FrogPilotAnnotatedCameraWidget::paintStandstillTimer(QPainter &p) {
   int minutes = standstillDuration / 60;
   int seconds = standstillDuration % 60;
 
-  p.setFont(InterFont(176, QFont::Bold));
+  p.setFont(InterFont(176, QFont::Normal));
   {
-    QString minuteStr = (minutes == 1) ? tr("1 minute") : QString(tr("%1 minutes")).arg(minutes);
+    QString minuteStr = (minutes == 1) ? tr("1 分鐘") : QString(tr("%1 分鐘")).arg(minutes);
     QRect textRect = p.fontMetrics().boundingRect(minuteStr);
     textRect.moveCenter({rect().center().x(), 210 - textRect.height() / 2});
     p.setPen(QPen(blendedColor));
@@ -913,7 +1017,7 @@ void FrogPilotAnnotatedCameraWidget::paintStandstillTimer(QPainter &p) {
 
   p.setFont(InterFont(66));
   {
-    QString secondStr = (seconds == 1) ? tr("1 second") : QString(tr("%1 seconds")).arg(seconds);
+    QString secondStr = (seconds == 1) ? tr("1 秒") : QString(tr("%1 秒")).arg(seconds);
     QRect textRect = p.fontMetrics().boundingRect(secondStr);
     textRect.moveCenter({rect().center().x(), 290 - textRect.height() / 2});
     p.setPen(QPen(whiteColor()));
@@ -925,13 +1029,18 @@ void FrogPilotAnnotatedCameraWidget::paintStandstillTimer(QPainter &p) {
 
 void FrogPilotAnnotatedCameraWidget::paintStoppingPoint(QPainter &p, UIScene &scene, FrogPilotUIScene &frogpilot_scene, QJsonObject &frogpilot_toggles) {
   p.save();
+/////////////////////////////////////////////////////
+  // 计算并写入到停止点的实时距离（单位：公尺）
+  int stopDistance = static_cast<int>(std::nearbyint(frogpilot_scene.model_length));
+  params_memory.putInt("StopmarkDistance", stopDistance);
+/////////////////////////////////////////////////////
 
   QPointF centerPoint = (scene.track_vertices.first() + scene.track_vertices.last()) / 2.0;
   QPointF adjustedPoint = centerPoint - QPointF(stopSignImg.width() / 2, stopSignImg.height());
   p.drawPixmap(adjustedPoint, stopSignImg);
 
   if (frogpilot_toggles.value("show_stopping_point_metrics").toBool()) {
-    QFont font = InterFont(35, QFont::DemiBold);
+    QFont font = InterFont(35, QFont::Normal);
     QString text = QString::number(std::nearbyint(frogpilot_scene.model_length * distanceConversion)) + leadDistanceUnit;
     QPointF textPosition = centerPoint - QPointF(QFontMetrics(font).horizontalAdvance(text) / 2, stopSignImg.height() + 35);
 
@@ -1023,3 +1132,244 @@ void FrogPilotAnnotatedCameraWidget::paintWeather(QPainter &p, const cereal::Fro
 
   p.restore();
 }
+
+/////////////////////////////////////////////////////
+QString FrogPilotAnnotatedCameraWidget::translateNavigationText(const cereal::NavInstruction::Reader &nav_instruction, bool is_metric) {
+  QString primary_str = QString::fromStdString(nav_instruction.getManeuverPrimaryText());
+  QString secondary_str = QString::fromStdString(nav_instruction.getManeuverSecondaryText());
+  auto distance_str_pair = map_format_distance(nav_instruction.getManeuverDistance(), is_metric);
+  QString type = QString::fromStdString(nav_instruction.getManeuverType());
+  QString modifier = QString::fromStdString(nav_instruction.getManeuverModifier());
+  QString distance_str = distance_str_pair.first;
+  QString distance_unit = distance_str_pair.second;
+
+  QString fn;
+  fn += "於" + distance_str + distance_unit + "後  ";
+
+  if (!modifier.isEmpty()) {
+    QString moditext;
+    if (modifier == "uturn") {
+      moditext = "迴轉";
+    } else if (modifier == "sharp right") {
+      moditext = "向右急";
+    } else if (modifier == "right") {
+      moditext = "向右";
+    } else if (modifier == "slight right") {
+      moditext = "靠右";
+    } else if (modifier == "straight") {
+      moditext = "直行";
+    } else if (modifier == "slight left") {
+      moditext = "靠左";
+    } else if (modifier == "left") {
+      moditext = "向左";
+    } else if (modifier == "sharp left") {
+      moditext = "向左急";
+    } else {
+      moditext = modifier;
+    }
+    fn += moditext;
+  }
+
+  type = type.trimmed();
+  if (!type.isEmpty()) {
+    QString typetext;
+    if (type == "turn") {
+      typetext = "轉彎";
+    } else if (type == "new name") {
+      typetext = "新路";
+    } else if (type == "depart") {
+      typetext = "出發";
+    } else if (type == "arrive") {
+      typetext = "抵達";
+    } else if (type == "merge") {
+      typetext = "合併";
+    } else if (type == "on ramp") {
+      typetext = "進入交流道";
+    } else if (type == "off ramp") {
+      typetext = "駛出交流道";
+    } else if (type == "fork") {
+      typetext = "換道";
+    } else if (type == "use lane") {
+      typetext = "線道";
+    } else if (type == "end off road") {
+      typetext = "抵達終點";
+    } else if (type == "continue") {
+      typetext = "直行";
+    } else if (type == "roundabout") {
+      typetext = "進入圓環";
+    } else if (type == "takeRoundabout") {
+      typetext = "圓環轉彎";
+    } else if (type == "exit roundabout") {
+      typetext = "駛出圓環";
+    } else if (type == "exit rotary") {
+      typetext = "駛出圓環";
+    } else if (type == "rotary") {
+      typetext = "進入圓環";
+    } else if (type == "notification") {
+      typetext = "注意";
+    } else if (type == "roundabout turn") {
+      typetext = "圓環轉彎";
+    } else {
+      typetext = type;
+    }
+    fn += typetext;
+  }
+
+  return fn + "\n" + primary_str + " " + secondary_str;
+}
+
+void FrogPilotAnnotatedCameraWidget::paintVehicleInfoPanel(QPainter &p, const cereal::CarState::Reader &carState, const QJsonObject &frogpilot_toggles) {
+  p.save();
+
+  // 繪製資訊面板背景
+  int leadspeed_diffProfile = params_memory.getInt("leadspeeddiffProfile");
+  const QRect info_rect(rect().left() + 20, rect().bottom() - 560, 220, 500);
+  p.setPen(Qt::NoPen);
+  if (leadspeed_diffProfile < -20) {
+    p.setBrush(Qt::red);
+  } else if (leadspeed_diffProfile < 0 && leadspeed_diffProfile > -20) {
+    p.setBrush(QColor(255, 165, 0));
+  } else {
+    p.setBrush(whiteColor());
+  }
+  p.drawRoundedRect(info_rect, 24, 24);
+
+  // 根據 AutoRoadtype 狀態改變邊框顏色
+  bool autoRoadtype = params.getBool("AutoRoadtype");
+  if (autoRoadtype) {
+    p.setPen(QPen(QColor(255, 165, 0), 6));
+  } else {
+    p.setPen(QPen(blackColor(), 6));
+  }
+  p.drawRoundedRect(info_rect.adjusted(9, 9, -9, -9), 16, 16);
+
+  // 道路類型
+  int roadProfile = params_memory.getInt("RoadtypeProfile");
+  std::map<int, QString> roadProfileMap = {
+    {0, "未選道路"},
+    {1, "街道巷弄"},
+    {2, "一般平面"},
+    {3, "快速道路"},
+    {4, "高速公路"},
+  };
+  QString roadProfileText = roadProfileMap[roadProfile];
+  p.setFont(InterFont(45, QFont::Normal));
+  p.setPen(QPen(blackColor(), 6));
+  p.drawText(info_rect.adjusted(20, 10, 0, 0), Qt::AlignTop | Qt::AlignLeft, roadProfileText);
+
+  // 駕駛模式
+  int accProfile = params_memory.getInt("AccelerationProfile");
+  std::map<int, QString> accelerationProfileMap = {
+    {0, "標準"},
+    {1, "節能"},
+    {2, "運動"},
+    {3, "超跑"},
+  };
+  QString accProfileText = "駕駛  " + accelerationProfileMap[accProfile];
+  p.setFont(InterFont(40, QFont::Normal));
+  p.drawText(info_rect.adjusted(20, 65, 0, 0), Qt::AlignTop | Qt::AlignLeft, accProfileText);
+
+  // 車距設定
+  std::map<int, QString> personalityProfileMap = {
+    {0, "接近"},
+    {1, "普通"},
+    {2, "遠離"},
+  };
+  int personalityProfile = params.getInt("LongitudinalPersonality");
+  QString profileText = "車距  " + personalityProfileMap[personalityProfile];
+  p.setFont(InterFont(40, QFont::Normal));
+  p.drawText(info_rect.adjusted(20, 110, 0, 0), Qt::AlignTop | Qt::AlignLeft, profileText);
+
+  //速差顯示
+  QString vr_text = "速差  " + QString::number(leadspeed_diffProfile);
+  p.drawText(info_rect.adjusted(20, 155, 0, 0), Qt::AlignTop | Qt::AlignLeft, vr_text);
+
+
+  // 油量顯示
+  float tankVolume = carState.getTankvol();
+  QString tankVolStr = QString::number(tankVolume);
+  if (tankVolume > 30) {
+    p.setPen(QPen(blackColor(), 6));
+  } else if (tankVolume > 10 && tankVolume <= 30) {
+    p.setPen(QPen(QColor(128, 0, 128), 6));
+  } else if (tankVolume <= 10) {
+    p.setPen(QPen(QColor(255, 0, 0), 6));
+  }
+  p.drawText(info_rect.adjusted(20, 290, 0, 0), Qt::AlignTop | Qt::AlignLeft, "油量  " + tankVolStr);
+
+  // 油溫顯示
+  float oilTemp = carState.getOiltemperature();
+  QString oilTempStr = QString::number(oilTemp);
+  if (oilTemp < 90) {
+    p.setPen(QPen(blackColor(), 6));
+  } else if (oilTemp > 90 && oilTemp <= 110) {
+    p.setPen(QPen(QColor(128, 0, 128), 6));
+  } else if (oilTemp > 110) {
+    p.setPen(QPen(QColor(255, 0, 0), 6));
+  }
+  p.drawText(info_rect.adjusted(20, 340, 0, 0), Qt::AlignTop | Qt::AlignLeft, "油溫  " + oilTempStr);
+
+  // 電壓顯示
+  std::stringstream buffer;
+  buffer << std::ifstream("/sys/class/hwmon/hwmon1/in1_input").rdbuf();
+  float voltage = (float)std::atoi(buffer.str().c_str()) / 1000.0f;
+  p.setPen(QPen(blackColor(), 6));
+  p.setFont(InterFont(40, QFont::Normal));
+  QString batteryVolStr = (voltage > 1) ? QString::number(voltage, 'f', 1) : "–";
+  p.drawText(info_rect.adjusted(20, 385, 0, 0), Qt::AlignTop | Qt::AlignLeft, "電壓  " + batteryVolStr);
+
+  // AutoACC 狀態
+  bool autoAcc = params.getBool("AutoACC");
+  std::map<int, QString> autoAccProfileMap = {
+    {0, "手動"},
+    {1, "自動"},
+  };
+  p.setFont(InterFont(40, QFont::Normal));
+  if (autoAcc) {
+    p.setPen(QPen(redColor(), 6));
+  } else {
+    p.setPen(QPen(blackColor(), 6));
+  }
+  QString autoAccProfileText = autoAccProfileMap[autoAcc ? 1 : 0] + " ACC";
+  p.drawText(info_rect.adjusted(20, 430, 0, 0), Qt::AlignTop | Qt::AlignLeft, autoAccProfileText);
+
+  // 油價計算（如果啟用）
+  bool fuelpriceEnabled = params.getBool("Fuelprice");
+  if (fuelpriceEnabled) {
+    int fuelCosts = params.getInt("Fuelcosts") / 10;
+    int fuelCostsNow = params.getInt("Fuelcostsnow");
+    int fuelCostsPre = params.getInt("Fuelcostspre");
+
+    if (fuelCostsNow != 0 && fuelCostsPre == 0) {
+      fuelCostsPre = fuelCostsPre + fuelCostsNow / 100;
+      params.putInt("Fuelcostsnow", 0);
+    }
+
+    float fuelTotal = carState.getFueltotal();
+    if (fuelTotal > 0) {
+      params.putInt("Fuelcostsnow", fuelCostsPre + (std::round(fuelTotal * 10) / 10 * fuelCosts) * 100);
+    }
+
+    int fuelConsumptionNow = params.getInt("Fuelconsumptionnow");
+    int fuelConsumptionPre = params.getInt("Fuelconsumptionpre");
+    if (fuelConsumptionNow != 0 && fuelConsumptionPre == 0) {
+      fuelConsumptionPre = fuelConsumptionPre + fuelConsumptionNow / 100;
+      params.putInt("Fuelconsumptionnow", 0);
+    }
+
+    if (fuelTotal > 0) {
+      params.putInt("Fuelconsumptionnow", fuelConsumptionPre + (std::round(fuelTotal * 100) / 100) * 100);
+    }
+
+    p.setPen(QPen(blackColor(), 6));
+    QString tankUsedText = "油資  " + QString::number(std::round(fuelTotal * 10) / 10 * fuelCosts);
+    p.drawText(info_rect.adjusted(20, 200, 0, 0), Qt::AlignTop | Qt::AlignLeft, tankUsedText);
+
+    QString fuelTotalStr = (fuelTotal > 0) ? QString::number(std::round(fuelTotal * 100) / 100) : "–";
+    p.drawText(info_rect.adjusted(20, 245, 0, 0), Qt::AlignTop | Qt::AlignLeft, "已用  " + fuelTotalStr);
+  }
+
+  p.restore();
+}
+/////////////////////////////////////////////////////
+
